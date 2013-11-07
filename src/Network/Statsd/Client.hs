@@ -5,7 +5,7 @@ module Network.Statsd.Client
         , Metric
         , Name
         -- Connecting to servers
-        , clientTo, clientToOn
+        , Network.Statsd.Client.connect, connectOn, Network.Statsd.Client.close
         -- Building metrics
         , guage, increment, decrement, histogram, meter, heartbeat
         -- * Sending metrics
@@ -13,30 +13,40 @@ module Network.Statsd.Client
         -- * Low level operations
         , socketOf
         ) where
-import Network.Socket
+
+import Network.Socket as N
 import Data.Maybe (listToMaybe)
 import Control.Monad (void)
 
 type Name   = String
 data StatsD = StatsD HostName PortNumber Socket
 
+-- | Obtain the socket used for communicating to the statsd server.
 socketOf :: StatsD -> Socket
 socketOf (StatsD _ _ s) = s
 
-clientTo :: HostName -> IO StatsD
-clientTo h = clientToOn h 8125
+-- | Obtain a socket for sending to a statsd server
+-- at the specified hostname.
+connect :: HostName -> IO StatsD
+connect h = connectOn h 8125
 
-clientToOn :: HostName -> PortNumber -> IO StatsD
-clientToOn hst port = do
+-- | Obtain a socket for sending to a statsd server
+-- at the specified hostname and port.
+connectOn :: HostName -> PortNumber -> IO StatsD
+connectOn hst port = do
     sAddr <- resolve hst port
     sock <- socket AF_INET Datagram defaultProtocol
-    connect sock sAddr
+    N.connect sock sAddr
     return (StatsD hst port sock)
  where
   resolve :: HostName -> PortNumber -> IO SockAddr
   resolve h p = do
       ai <- getAddrInfo (Just $ defaultHints { addrFamily = AF_INET, addrSocketType = Datagram } ) (Just h) (Just (show p))
       return (maybe (error $ "Could not resolve host " ++ h) addrAddress (listToMaybe ai))
+
+-- | Close a socket used for StatsD
+close :: StatsD -> IO ()
+close = N.close . socketOf
 
 showRailed :: (Bounded i, Show i, Integral i) => i -> String
 showRailed i
@@ -84,9 +94,6 @@ sendMetric :: StatsD -> Metric -> IO ()
 sendMetric s m = sendMetrics s [m]
 
 sendMetrics :: StatsD -> [Metric] -> IO ()
-sendMetrics (socketOf -> s) = void . send s . unlines . map show
+sendMetrics (socketOf -> s) = void . send s . unlines . map metricString
 
-newtype Metric = Metric { metricString :: String }
-
-instance Show Metric where
-    show = metricString
+newtype Metric = Metric { metricString :: String } deriving (Eq, Ord, Show)
