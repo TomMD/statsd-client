@@ -1,11 +1,14 @@
 {-# LANGUAGE ViewPatterns #-}
-module Network.Statsd.Client 
+module Network.Statsd.Client
         ( -- * Types
           StatsD
         , Metric
         , Name
+        , Socket
+        , HostName
+        , PortNumber(..)
         -- Connecting to servers
-        , Network.Statsd.Client.connect, connectOn, Network.Statsd.Client.close
+        , Network.Statsd.Client.connect, connectOn, Network.Statsd.Client.close, withStatsd
         -- Building metrics
         , guage, increment, decrement, histogram, meter, heartbeat
         -- * Sending metrics
@@ -14,9 +17,11 @@ module Network.Statsd.Client
         , socketOf
         ) where
 
-import Network.Socket as N
+import qualified Network.Socket as N
+import Network.Socket (PortNumber, HostName, Socket, send, addrsocketType, AF_INET, getAddrInfo, defaultHints)
 import Data.Maybe (listToMaybe)
 import Control.Monad (void)
+import Control.Exception (bracket)
 
 type Name   = String
 data StatsD = StatsD HostName PortNumber Socket
@@ -48,6 +53,10 @@ connectOn hst port = do
 close :: StatsD -> IO ()
 close = N.close . socketOf
 
+-- Open a socket to a StatsD server for the duration of the IO action.
+withStatsd :: HostName -> PortNumber -> (StatsD -> IO a) -> IO a
+withStatsd h p io = bracket (connectOn h p) close io
+
 showRailed :: (Bounded i, Show i, Integral i) => i -> String
 showRailed i
   | fromIntegral minI > high && high > fromIntegral i = show high
@@ -76,12 +85,12 @@ decrement  m i sampRate =
     toStr Nothing  = ""
     toStr (Just d) = "|@" ++ show d
 
+-- | A time (in ms)
 timing    :: (Show int, Bounded int, Integral int) => Name -> int -> Metric
 timing     m i = Metric (m ++ ":" ++ showRailed i ++ "|ms")
 
 histogram :: (Show int, Bounded int, Integral int) => Name -> int -> Metric
 histogram  m i = Metric (m ++ ":" ++ showRailed i ++ "|h")
-
 
 meter     :: (Show int, Bounded int, Integral int) => Name -> int -> Metric
 meter      m i = Metric (m ++ ":" ++ showRailed i ++ "|m")
@@ -89,10 +98,11 @@ meter      m i = Metric (m ++ ":" ++ showRailed i ++ "|m")
 heartbeat :: Name -> Metric
 heartbeat n = Metric ("heartbeat." ++ n ++":1|c")
 
--- Send a single metric
+-- | Send a single metric
 sendMetric :: StatsD -> Metric -> IO ()
 sendMetric s m = sendMetrics s [m]
 
+-- | Send many metrics
 sendMetrics :: StatsD -> [Metric] -> IO ()
 sendMetrics (socketOf -> s) = void . send s . unlines . map metricString
 
